@@ -1,4 +1,5 @@
 import { Router } from 'itty-router'
+import { json, missing, withContent } from 'itty-router-extras'
 
 // Create a new router
 const router = Router()
@@ -12,41 +13,55 @@ router.get('/', () => {
   )
 })
 
-/*
-This route demonstrates path parameters, allowing you to extract fragments from the request
-URL.
-Try visit /example/hello and see the response.
-*/
-router.get('/example/:text', ({ params }) => {
-  // Decode text like "Hello%20world" into "Hello world"
-  let input = decodeURIComponent(params.text)
+router.get('/posts', async request => {
+  var json_keys = await posts.list()
+  var arr_keys = json_keys.keys
 
-  // Construct a buffer from our input
-  let buffer = Buffer.from(input, 'utf8')
+  console.log(arr_keys)
 
-  // Serialise the buffer into a base64 string
-  let base64 = buffer.toString('base64')
-
-  // Return the HTML with the string to the client
-  return new Response(`<p>Base64 encoding: <code>${base64}</code></p>`, {
+  const ret = await Promise.all(arr_keys.map(key => posts.get(key.name)))
+  console.log(ret)
+  // return posts as json
+  return new Response(JSON.stringify(ret), {
     headers: {
-      'Content-Type': 'text/html',
+      'Content-Type': 'application/json',
     },
   })
 })
 
+function uuidv4() {
+  return ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, c =>
+    (
+      c ^
+      (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))
+    ).toString(16),
+  )
+}
 
-router.get('/posts', async request => {
+router.post('/posts', withContent, async request => {
+  try {
+    const { content } = request
+    console.log(content)
+    var body = JSON.stringify(content)
+    var escaped = body.replace(/\\n/g, "\\n")
+                                      .replace(/\\'/g, "\\'")
+                                      .replace(/\\"/g, '\\"')
+                                      .replace(/\\&/g, "\\&")
+                                      .replace(/\\r/g, "\\r")
+                                      .replace(/\\t/g, "\\t")
+                                      .replace(/\\b/g, "\\b")
+                                      .replace(/\\f/g, "\\f")
+    console.log(escaped)
+    await posts.put(uuidv4(), escaped)
 
-  const value = await posts.get('first')
-  if (value === null) {
-    return new Response('Value not found', { status: 404 })
+    return new Response(escaped, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+  } catch (err) {
+    return new Response(err, { status: 500 })
   }
-
-
-  return new Response(value, {
-    headers: { 'Content-Type': 'application/json' },
-  })
 })
 
 router.all('*', () => new Response('404, not found!', { status: 404 }))
