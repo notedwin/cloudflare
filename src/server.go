@@ -8,51 +8,80 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/jwtauth"
-	"github.com/lestrrat-go/jwx/jwt"
+	"github.com/golang-jwt/jwt"
 )
 
-var tokenAuth *jwtauth.JWTAuth
+var hmacSampleSecret []byte = []byte("secret")
+
+//create a new token
+func createToken(username string) (string, error) {
+	claims := &jwt.StandardClaims{
+		ExpiresAt: time.Now().Add(time.Hour * 24).Unix(),
+		IssuedAt:  time.Now().Unix(),
+		Subject:   username,
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(hmacSampleSecret)
+	return tokenString, err
+}
+
+func validateToken(tokenString string) (bool, map[string]interface{}, error) {
+
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return hmacSampleSecret, nil
+	})
+	if err != nil {
+		return false, map[string]interface{}{}, err
+	} else {
+		//get claims
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if ok && token.Valid {
+			fmt.Printf("%v %v\n", claims["exp"], claims["iat"])
+			return true, claims, nil
+		}
+		return false, map[string]interface{}{"error": err.Error()}, nil
+	}
+
+}
 
 func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 
-	// Protected routes
-	r.Group(func(r chi.Router) {
-		r.Get("/admin", func(w http.ResponseWriter, r *http.Request) {
-			cookie, err := r.Cookie("token")
-			ctoken := ""
-			if err != nil {
-				ctoken = cookie.Value
+	r.Get("/admin", func(w http.ResponseWriter, r *http.Request) {
+		cookie, _ := r.Cookie("token")
+		if cookie != nil {
+			valid, claims, err := validateToken(cookie.Value)
+			if valid {
+				w.Write([]byte(fmt.Sprintf("Welcome to the admin page, %v!", claims["sub"])))
+			} else {
+				w.Write([]byte(fmt.Sprintf("Invalid Token: %v", err)))
 			}
-
-			token, err := tokenAuth.Decode(ctoken)
-			if err != nil {
-				http.Error(w, "Invalid token", http.StatusUnauthorized)
-			}
-			if token == nil {
-				http.Error(w, "Invalid token", http.StatusUnauthorized)
-			}
-			if err := jwt.Validate(token); err != nil {
-				http.Error(w, "Invalid token", http.StatusUnauthorized)
-			}
-
-			var claims map[string]interface{} = token.PrivateClaims()
-
-			w.Write([]byte(fmt.Sprintf("protected area. hi %v", claims["sub"])))
-		})
+		} else {
+			w.Write([]byte("Please login\n"))
+		}
 	})
+
 	r.Get("/auth/{username}", func(w http.ResponseWriter, r *http.Request) {
 		username := chi.URLParam(r, "username")
 
-		_, tokenString, _ := tokenAuth.Encode(map[string]interface{}{"sub": username, "exp": 86400})
+		tokenString, err := createToken(username)
 
-		//return token as a cookie
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+
+		//return token as a cookie that is not accessible by javascript
 		http.SetCookie(w, &http.Cookie{
 			Name:    "token",
 			Value:   tokenString,
+			Path:    "/",
 			Expires: time.Now().Add(time.Hour * 24),
+			Secure:  true,
 		})
 		w.Write([]byte(fmt.Sprintf("Welcome %v", username)))
 	})
